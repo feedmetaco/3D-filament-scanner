@@ -35,6 +35,7 @@ class Product(ProductBase, table=True):
     )
 
     spools: List["Spool"] = Relationship(back_populates="product")
+    order_items: List["OrderItem"] = Relationship(back_populates="product")
 
 
 class ProductCreate(ProductBase):
@@ -64,7 +65,7 @@ class SpoolBase(SQLModel):
 
 class Spool(SpoolBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    order_id: Optional[int] = None
+    order_id: Optional[int] = Field(default=None, foreign_key="order.id")
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=Column(DateTime(timezone=True)),
@@ -75,6 +76,7 @@ class Spool(SpoolBase, table=True):
     )
 
     product: Optional[Product] = Relationship(back_populates="spools")
+    order: Optional["Order"] = Relationship(back_populates="spools")
 
 
 class SpoolCreate(SpoolBase):
@@ -90,3 +92,86 @@ class SpoolUpdate(SQLModel):
     photo_path: Optional[str] = None
     status: Optional[SpoolStatus] = None
     order_id: Optional[int] = None
+
+
+# Phase 5 (v1.1): Order Management Models
+
+
+class OrderItemStatus(str, Enum):
+    PENDING_MAPPING = "pending_mapping"
+    CONFIRMED = "confirmed"
+
+
+class OrderBase(SQLModel):
+    vendor: str
+    order_number: str
+    order_date: Optional[date] = None
+    invoice_path: Optional[str] = None
+    total_amount: Optional[float] = None
+    currency: str = "USD"
+
+
+class Order(OrderBase, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column=Column(DateTime(timezone=True)),
+    )
+    updated_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column=Column(DateTime(timezone=True), onupdate=datetime.utcnow),
+    )
+
+    items: List["OrderItem"] = Relationship(back_populates="order")
+    spools: List["Spool"] = Relationship(back_populates="order")
+
+
+class OrderCreate(OrderBase):
+    pass
+
+
+class OrderUpdate(SQLModel):
+    vendor: Optional[str] = None
+    order_number: Optional[str] = None
+    order_date: Optional[date] = None
+    invoice_path: Optional[str] = None
+    total_amount: Optional[float] = None
+    currency: Optional[str] = None
+
+
+class OrderItemBase(SQLModel):
+    order_id: int = Field(foreign_key="order.id")
+    product_id: Optional[int] = Field(default=None, foreign_key="product.id")
+    title_raw: str
+    quantity: int
+    unit_price: float
+    currency: str = "USD"
+    status: OrderItemStatus = Field(default=OrderItemStatus.PENDING_MAPPING)
+
+
+class OrderItem(OrderItemBase, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column=Column(DateTime(timezone=True)),
+    )
+    updated_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column=Column(DateTime(timezone=True), onupdate=datetime.utcnow),
+    )
+
+    order: Optional[Order] = Relationship(back_populates="items")
+    product: Optional[Product] = Relationship(back_populates="order_items")
+
+
+class OrderItemCreate(OrderItemBase):
+    pass
+
+
+class OrderItemUpdate(SQLModel):
+    product_id: Optional[int] = None
+    title_raw: Optional[str] = None
+    quantity: Optional[int] = None
+    unit_price: Optional[float] = None
+    currency: Optional[str] = None
+    status: Optional[OrderItemStatus] = None
