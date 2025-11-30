@@ -508,6 +508,59 @@ Whenever you start a “big change” session with ChatGPT Codex, tell it explic
 
 Codex should always respect `PROJECT_PLAN.md` as the spec.
 
+
+## 8. How ChatGPT Codex Must Work
+
+ChatGPT Codex (GitHub-connected ChatGPT) must treat this document as the **source of truth** and follow this workflow for every change:
+
+1. **Read the plan and tasks first**
+   - Before making changes, Codex must:
+     - Re-read the relevant sections of this README/PROJECT_PLAN.
+     - Locate the current phase (v1, v1.1, etc.).
+     - Identify the specific checklist items it is about to work on.
+
+2. **Validate work after coding**
+   - For each task it claims to complete, Codex must:
+     - Run appropriate checks (e.g., `pytest` for backend, `npm test`/`npm run build` for frontend) if feasible in the environment.
+     - Hit health endpoints or describe how to manually verify (e.g., "Open `/docs` and confirm endpoints X/Y are present").
+     - Summarize what it tested and any limitations (e.g., "could not run Docker here, please run `docker compose up` locally").
+
+3. **Update TODO lists and progress in this plan**
+   - After completing work, Codex must:
+     - Update the relevant checkboxes in this file from `[ ]` to `[x]` for tasks it has actually done.
+     - If it partially completes a task, add a short note (e.g., `// TODO: still need to wire frontend to endpoint`).
+     - If it creates new subtasks, add them as indented checklist items under the appropriate phase.
+
+4. **Maintain an explicit progress log**
+   - At the end of each larger change (e.g., PR or major commit), Codex should append or update a section:
+
+     ```markdown
+     ### Progress Log (Codex)
+
+     - 2025-11-30 – Implemented Phase 1 backend:
+       - Added `backend/` FastAPI app with Product + Spool models.
+       - Implemented CRUD endpoints for products and spools.
+       - Added pytest smoke tests and GitHub Actions CI.
+     ```
+
+   - This log should be brief but concrete: what was added, where it lives, and how to run it.
+
+5. **Define explicit next steps**
+
+   After each change, Codex must add/update a small “Next Steps” block:
+
+   ```markdown
+   ### Next Steps
+
+   **For Sami:**
+   - [ ] Pull latest `main`
+   - [ ] Run `uvicorn ...` to verify backend locally
+   - [ ] Hit `/docs` and create a test product + spool
+
+   **For Codex:**
+   - [ ] Start Phase 2 (frontend) once Sami confirms backend runs locally
+
+
 ### 4.3 Cursor + Claude (local dev assistant)
 
 Cursor/Claude runs in your editor and has access to your **local workspace**, not GitHub directly.
