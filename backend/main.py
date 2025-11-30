@@ -11,6 +11,7 @@ from backend.models import (
     ProductUpdate,
     Spool,
     SpoolCreate,
+    SpoolStatus,
     SpoolUpdate,
 )
 
@@ -40,8 +41,23 @@ def create_product(
 
 
 @app.get("/api/v1/products", response_model=List[Product], tags=["products"])
-def list_products(session: Session = Depends(get_session)) -> List[Product]:
-    products = session.exec(select(Product)).all()
+def list_products(
+    brand: str | None = None,
+    material: str | None = None,
+    color_name: str | None = None,
+    diameter_mm: float | None = None,
+    session: Session = Depends(get_session),
+) -> List[Product]:
+    query = select(Product)
+    if brand:
+        query = query.where(Product.brand == brand)
+    if material:
+        query = query.where(Product.material == material)
+    if color_name:
+        query = query.where(Product.color_name == color_name)
+    if diameter_mm:
+        query = query.where(Product.diameter_mm == diameter_mm)
+    products = session.exec(query).all()
     return products
 
 
@@ -94,8 +110,23 @@ def create_spool(spool_in: SpoolCreate, session: Session = Depends(get_session))
 
 
 @app.get("/api/v1/spools", response_model=List[Spool], tags=["spools"])
-def list_spools(session: Session = Depends(get_session)) -> List[Spool]:
-    spools = session.exec(select(Spool)).all()
+def list_spools(
+    status: str | None = None,
+    product_id: int | None = None,
+    vendor: str | None = None,
+    storage_location: str | None = None,
+    session: Session = Depends(get_session),
+) -> List[Spool]:
+    query = select(Spool)
+    if status:
+        query = query.where(Spool.status == status)
+    if product_id:
+        query = query.where(Spool.product_id == product_id)
+    if vendor:
+        query = query.where(Spool.vendor == vendor)
+    if storage_location:
+        query = query.where(Spool.storage_location == storage_location)
+    spools = session.exec(query).all()
     return spools
 
 
@@ -133,6 +164,21 @@ def delete_spool(spool_id: int, session: Session = Depends(get_session)) -> None
         raise HTTPException(status_code=404, detail="Spool not found")
     session.delete(spool)
     session.commit()
+
+
+@app.post("/api/v1/spools/{spool_id}/mark-used", response_model=Spool, tags=["spools"])
+def mark_spool_used(spool_id: int, session: Session = Depends(get_session)) -> Spool:
+    spool = session.get(Spool, spool_id)
+    if not spool:
+        raise HTTPException(status_code=404, detail="Spool not found")
+
+    spool.status = SpoolStatus.USED_UP
+    spool.updated_at = datetime.utcnow()
+
+    session.add(spool)
+    session.commit()
+    session.refresh(spool)
+    return spool
 
 
 if __name__ == "__main__":
