@@ -178,6 +178,9 @@ async def parse_label(file: UploadFile = File(...)):
     Upload a filament box label image and extract structured data.
 
     Returns parsed fields: brand, material, color_name, diameter_mm, barcode, raw_text
+
+    The raw_text field shows exactly what Tesseract OCR extracted from the image.
+    This is useful for debugging when fields are not detected correctly.
     """
     # Validate file type
     if not file.content_type or not file.content_type.startswith("image/"):

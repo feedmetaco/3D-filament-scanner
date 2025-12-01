@@ -166,10 +166,16 @@ class LabelParser:
                 result["material"] = "TPU"
 
         # Color
+        # First try brand-specific pattern
         color_match = re.search(patterns["color"], text, re.IGNORECASE)
         if color_match:
-            result["color_name"] = color_match.group(1).title()
-        else:
+            color_candidate = color_match.group(1).strip()
+            # Filter out invalid colors (single letters, numbers, etc.)
+            if len(color_candidate) > 1 and not re.match(r'^[A-Z0-9]{1,2}$', color_candidate):
+                result["color_name"] = color_candidate.title()
+
+        # If no valid color found, try fallback
+        if not result["color_name"]:
             # Fallback: search for common colors anywhere in text
             common_colors = ["White", "Black", "Red", "Blue", "Green", "Yellow",
                            "Orange", "Purple", "Grey", "Gray", "Silver", "Gold",
@@ -189,5 +195,15 @@ class LabelParser:
             barcode_match = re.search(patterns["barcode"], text)
             if barcode_match:
                 result["barcode"] = barcode_match.group(0)
+            else:
+                # Fallback: look for barcode-like patterns (common OCR substitutions)
+                # X003II1ZZL might be read as X0O3II1ZZL, X003l11ZZL, etc.
+                # General pattern: X followed by alphanumeric characters
+                fallback_match = re.search(r'X[0O][0O][0-9A-Z]{2}[0-9A-Z]{2}[0-9A-Z]{4}', text, re.IGNORECASE)
+                if fallback_match:
+                    barcode = fallback_match.group(0).upper()
+                    # Fix common OCR mistakes
+                    barcode = barcode.replace('O', '0')  # O → 0
+                    result["barcode"] = barcode
 
         return result
