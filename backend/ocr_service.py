@@ -1,7 +1,7 @@
 import re
 from typing import Dict, Optional
 import pytesseract
-from PIL import Image, ImageEnhance
+from PIL import Image, ImageEnhance, ImageFilter
 from io import BytesIO
 
 
@@ -36,12 +36,30 @@ class LabelParser:
     def preprocess_image(image_bytes: bytes) -> Image.Image:
         """Convert uploaded image to format suitable for OCR."""
         img = Image.open(BytesIO(image_bytes))
+
         # Convert to RGB if needed
         if img.mode != "RGB":
             img = img.convert("RGB")
+
+        # Resize if image is very small (improves OCR accuracy)
+        width, height = img.size
+        if width < 800 or height < 800:
+            scale_factor = max(800 / width, 800 / height)
+            new_width = int(width * scale_factor)
+            new_height = int(height * scale_factor)
+            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+        # Increase sharpness for clearer text
+        img = img.filter(ImageFilter.SHARPEN)
+
         # Increase contrast for better OCR
         enhancer = ImageEnhance.Contrast(img)
         img = enhancer.enhance(2.0)
+
+        # Increase brightness slightly
+        brightness_enhancer = ImageEnhance.Brightness(img)
+        img = brightness_enhancer.enhance(1.2)
+
         return img
 
     @staticmethod
@@ -65,7 +83,12 @@ class LabelParser:
         """
         # Preprocess and run OCR
         img = LabelParser.preprocess_image(image_bytes)
-        text = pytesseract.image_to_string(img)
+
+        # Configure Tesseract for better accuracy
+        # PSM 3 = Fully automatic page segmentation (default)
+        # OEM 3 = Default OCR Engine Mode (both legacy and LSTM)
+        custom_config = r'--oem 3 --psm 3'
+        text = pytesseract.image_to_string(img, config=custom_config)
 
         # Detect brand
         brand = LabelParser.detect_brand(text)
