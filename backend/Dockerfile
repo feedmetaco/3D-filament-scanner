@@ -16,5 +16,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend ./backend
 COPY requirements.txt .
 
-# Railway will set $PORT
-CMD uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+# Railway will set $PORT, use shell form to expand variable
+CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
