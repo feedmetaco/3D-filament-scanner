@@ -11,15 +11,15 @@ class LabelParser:
     BRAND_PATTERNS = {
         "esun": {
             "identifier": r"e(SUN|sun)",
-            "material": r"(PLA\+?|ABS|PETG|TPU)",
-            "color": r"(?:Color[:\s]+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
+            "material": r"(PLA\+|PLA|ABS|PETG|TPU)(?:\s+filament)?",
+            "color": r"(?:Printers,?\s+|,\s+)?(White|Black|Red|Blue|Green|Yellow|Orange|Purple|Grey|Gray|Transparent|Natural|[A-Z][a-z]+)",
             "diameter": r"(1\.75|2\.85|3\.0)mm",
-            "barcode": r"X0[A-Z0-9]{2}\|\|[A-Z0-9]{4,6}"
+            "barcode": r"X0[A-Z0-9IO]{2}[A-Z0-9IO]{2}[A-Z0-9IO]{4}"
         },
         "sunlu": {
             "identifier": r"SUNLU",
             "material": r"(PLA|ABS|PETG|TPU|SILK\s+PLA)",
-            "color": r"(Yellow|Red|Blue|Green|White|Black|[A-Z][a-z]+)",
+            "color": r"(Yellow|Red|Blue|Green|White|Black|Orange|Purple|Grey|Gray|[A-Z][a-z]+)",
             "diameter": r"(1\.75|2\.85|3\.0)mm",
             "barcode": r"X[0-9]{4}[A-Z0-9]{6}"
         },
@@ -82,8 +82,13 @@ class LabelParser:
         patterns = LabelParser.BRAND_PATTERNS[brand]
 
         # Extract fields using brand-specific patterns
+        brand_names = {
+            "esun": "eSUN",
+            "sunlu": "Sunlu",
+            "bambu": "Bambu Lab"
+        }
         result = {
-            "brand": brand.upper() if brand == "esun" else brand.title(),
+            "brand": brand_names.get(brand, brand.title()),
             "material": None,
             "color_name": None,
             "diameter_mm": None,
