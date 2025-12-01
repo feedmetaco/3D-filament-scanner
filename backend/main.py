@@ -15,6 +15,7 @@ from backend.models import (
     SpoolUpdate,
 )
 from backend.ocr_service import LabelParser
+from backend.invoice_parser import InvoiceParser
 
 app = FastAPI(title="3D Filament Scanner API", version="1.0.0")
 
@@ -189,6 +190,136 @@ async def parse_label(file: UploadFile = File(...)):
     result = LabelParser.parse_label(image_bytes)
 
     return result
+
+
+# Invoice Parsing Endpoint
+@app.post("/api/v1/invoice/parse", tags=["invoice"])
+async def parse_invoice(file: UploadFile = File(...)):
+    """
+    Upload a PDF invoice and extract order information with all filament products.
+
+    Returns:
+    - order_number: Order ID from invoice
+    - order_date: Purchase date
+    - vendor: Vendor name (e.g., "Bambu Lab", "Amazon")
+    - items: List of products with brand, material, color_name, diameter_mm, quantity, price
+    """
+    # Validate file type
+    if not file.content_type or file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="File must be a PDF")
+
+    # Read PDF bytes
+    pdf_bytes = await file.read()
+
+    try:
+        # Parse invoice
+        result = InvoiceParser.parse_invoice(pdf_bytes)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to parse invoice: {str(e)}")
+
+
+# Bulk Import from Invoice
+@app.post("/api/v1/invoice/import", tags=["invoice"])
+async def import_from_invoice(
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session)
+):
+    """
+    Upload a PDF invoice and automatically create Products and Spools for all items.
+
+    This endpoint:
+    1. Parses the invoice to extract all filament products
+    2. Creates or finds matching Product records
+    3. Creates Spool records for each quantity with purchase details
+    4. Returns summary of created records
+
+    Returns:
+    - products_created: Number of new products
+    - spools_created: Number of new spools
+    - order_number: Order ID from invoice
+    - items: List of created products and spools
+    """
+    # Validate file type
+    if not file.content_type or file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="File must be a PDF")
+
+    # Read PDF bytes
+    pdf_bytes = await file.read()
+
+    try:
+        # Parse invoice
+        invoice_data = InvoiceParser.parse_invoice(pdf_bytes)
+
+        products_created = 0
+        spools_created = 0
+        imported_items = []
+
+        for item in invoice_data["items"]:
+            # Check if product exists
+            query = select(Product).where(
+                Product.brand == item["brand"],
+                Product.material == item["material"],
+                Product.color_name == item["color_name"],
+                Product.diameter_mm == item["diameter_mm"]
+            )
+            existing_product = session.exec(query).first()
+
+            if existing_product:
+                product = existing_product
+            else:
+                # Create new product
+                product = Product(
+                    brand=item["brand"],
+                    material=item["material"],
+                    color_name=item["color_name"],
+                    diameter_mm=item["diameter_mm"],
+                    line=item.get("product_line"),
+                    sku=item.get("sku")
+                )
+                session.add(product)
+                session.flush()  # Get product ID
+                products_created += 1
+
+            # Create spools for each quantity
+            for _ in range(item["quantity"]):
+                spool = Spool(
+                    product_id=product.id,
+                    purchase_date=invoice_data["order_date"],
+                    vendor=invoice_data["vendor"],
+                    price=item.get("price"),
+                    status="in_stock"
+                )
+                session.add(spool)
+                spools_created += 1
+
+            imported_items.append({
+                "product_id": product.id,
+                "brand": product.brand,
+                "material": product.material,
+                "color_name": product.color_name,
+                "quantity": item["quantity"],
+                "price": item.get("price")
+            })
+
+        session.commit()
+
+        return {
+            "success": True,
+            "products_created": products_created,
+            "spools_created": spools_created,
+            "order_number": invoice_data["order_number"],
+            "order_date": invoice_data["order_date"],
+            "vendor": invoice_data["vendor"],
+            "items": imported_items
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to import invoice: {str(e)}")
 
 
 if __name__ == "__main__":
