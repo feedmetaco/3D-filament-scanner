@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
+import { API_URL } from '../config';
 
 function ProductDetailPage() {
   const { id } = useParams();
@@ -17,13 +18,13 @@ function ProductDetailPage() {
       setLoading(true);
 
       // Fetch product details
-      const productResponse = await fetch(`http://localhost:8000/api/v1/products/${id}`);
+      const productResponse = await fetch(`${API_URL}/api/v1/products/${id}`);
       if (!productResponse.ok) throw new Error('Product not found');
       const productData = await productResponse.json();
       setProduct(productData);
 
       // Fetch spools for this product
-      const spoolsResponse = await fetch(`http://localhost:8000/api/v1/spools?product_id=${id}`);
+      const spoolsResponse = await fetch(`${API_URL}/api/v1/spools?product_id=${id}`);
       if (!spoolsResponse.ok) throw new Error('Failed to fetch spools');
       const spoolsData = await spoolsResponse.json();
       setSpools(spoolsData);

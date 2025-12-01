@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { API_URL } from '../config';
 
 function AddSpoolPage() {
   const navigate = useNavigate();
@@ -21,7 +22,7 @@ function AddSpoolPage() {
 
   const fetchProducts = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/v1/products');
+      const response = await fetch(`${API_URL}/api/v1/products`);
       if (!response.ok) throw new Error('Failed to fetch products');
       const data = await response.json();
       setProducts(data);
@@ -55,7 +56,7 @@ function AddSpoolPage() {
       if (formData.purchase_date) payload.purchase_date = formData.purchase_date;
       if (formData.storage_location) payload.storage_location = formData.storage_location;
 
-      const response = await fetch('http://localhost:8000/api/v1/spools', {
+      const response = await fetch(`${API_URL}/api/v1/spools`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

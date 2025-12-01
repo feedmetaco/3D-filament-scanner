@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { API_URL } from '../config';
 
 function InventoryPage() {
   const [products, setProducts] = useState([]);
@@ -22,7 +23,7 @@ function InventoryPage() {
       if (filters.material) params.append('material', filters.material);
       if (filters.color_name) params.append('color_name', filters.color_name);
 
-      const response = await fetch(`http://localhost:8000/api/v1/products?${params}`);
+      const response = await fetch(`${API_URL}/api/v1/products?${params}`);
       if (!response.ok) throw new Error('Failed to fetch products');
 
       const data = await response.json();

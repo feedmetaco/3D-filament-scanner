@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { API_URL } from '../config';
 
 function SpoolListPage() {
   const [spools, setSpools] = useState([]);
@@ -22,7 +23,7 @@ function SpoolListPage() {
       if (filters.vendor) params.append('vendor', filters.vendor);
       if (filters.storage_location) params.append('storage_location', filters.storage_location);
 
-      const response = await fetch(`http://localhost:8000/api/v1/spools?${params}`);
+      const response = await fetch(`${API_URL}/api/v1/spools?${params}`);
       if (!response.ok) throw new Error('Failed to fetch spools');
 
       const data = await response.json();
@@ -37,7 +38,7 @@ function SpoolListPage() {
 
   const markSpoolUsed = async (spoolId) => {
     try {
-      const response = await fetch(`http://localhost:8000/api/v1/spools/${spoolId}/mark-used`, {
+      const response = await fetch(`${API_URL}/api/v1/spools/${spoolId}/mark-used`, {
         method: 'POST',
       });
 
