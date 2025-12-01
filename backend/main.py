@@ -1,7 +1,8 @@
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, select
 
 from backend.database import get_session, init_db
@@ -13,8 +14,18 @@ from backend.models import (
     SpoolCreate,
     SpoolUpdate,
 )
+from backend.ocr_service import LabelParser
 
 app = FastAPI(title="3D Filament Scanner API", version="1.0.0")
+
+# Add CORS middleware for frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Will restrict to frontend domain after deployment
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.on_event("startup")
@@ -40,8 +51,23 @@ def create_product(
 
 
 @app.get("/api/v1/products", response_model=List[Product], tags=["products"])
-def list_products(session: Session = Depends(get_session)) -> List[Product]:
-    products = session.exec(select(Product)).all()
+def list_products(
+    brand: Optional[str] = None,
+    material: Optional[str] = None,
+    color_name: Optional[str] = None,
+    session: Session = Depends(get_session)
+) -> List[Product]:
+    """List products with optional filtering by brand, material, and color_name."""
+    query = select(Product)
+
+    if brand:
+        query = query.where(Product.brand.ilike(f"%{brand}%"))
+    if material:
+        query = query.where(Product.material.ilike(f"%{material}%"))
+    if color_name:
+        query = query.where(Product.color_name.ilike(f"%{color_name}%"))
+
+    products = session.exec(query).all()
     return products
 
 
@@ -94,8 +120,17 @@ def create_spool(spool_in: SpoolCreate, session: Session = Depends(get_session))
 
 
 @app.get("/api/v1/spools", response_model=List[Spool], tags=["spools"])
-def list_spools(session: Session = Depends(get_session)) -> List[Spool]:
-    spools = session.exec(select(Spool)).all()
+def list_spools(
+    status: Optional[str] = None,
+    session: Session = Depends(get_session)
+) -> List[Spool]:
+    """List spools with optional filtering by status."""
+    query = select(Spool)
+
+    if status:
+        query = query.where(Spool.status == status)
+
+    spools = session.exec(query).all()
     return spools
 
 
@@ -133,6 +168,27 @@ def delete_spool(spool_id: int, session: Session = Depends(get_session)) -> None
         raise HTTPException(status_code=404, detail="Spool not found")
     session.delete(spool)
     session.commit()
+
+
+# OCR Endpoint
+@app.post("/api/v1/ocr/parse-label", tags=["ocr"])
+async def parse_label(file: UploadFile = File(...)):
+    """
+    Upload a filament box label image and extract structured data.
+
+    Returns parsed fields: brand, material, color_name, diameter_mm, barcode, raw_text
+    """
+    # Validate file type
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+
+    # Read image bytes
+    image_bytes = await file.read()
+
+    # Parse label using OCR
+    result = LabelParser.parse_label(image_bytes)
+
+    return result
 
 
 if __name__ == "__main__":
