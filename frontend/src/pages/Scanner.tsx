@@ -65,7 +65,7 @@ export default function Scanner() {
     setError(null);
     setUploadProgress(0);
 
-    let progressInterval: NodeJS.Timeout | null = null;
+    let progressInterval: ReturnType<typeof setInterval> | null = null;
 
     try {
       progressInterval = setInterval(() => {
