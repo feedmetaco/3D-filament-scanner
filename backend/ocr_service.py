@@ -1,8 +1,16 @@
 import re
-from typing import Dict, Optional
+import logging
+from typing import Dict, Optional, Tuple
 import pytesseract
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from io import BytesIO
+
+logger = logging.getLogger(__name__)
+
+
+class OCRError(Exception):
+    """Custom exception for OCR-related errors."""
+    pass
 
 
 class LabelParser:
@@ -32,14 +40,42 @@ class LabelParser:
         }
     }
 
-    @staticmethod
-    def preprocess_image(image_bytes: bytes) -> Image.Image:
-        """Convert uploaded image to format suitable for OCR."""
-        img = Image.open(BytesIO(image_bytes))
+    # PSM modes optimized for labels (try in order of preference)
+    PSM_MODES = [
+        6,   # Uniform block of text (best for labels)
+        11,  # Sparse text (good for labels with spacing)
+        3,   # Fully automatic (fallback)
+        7,   # Single text line (fallback)
+    ]
 
+    @staticmethod
+    def _check_tesseract_available() -> bool:
+        """Check if Tesseract is installed and accessible."""
+        try:
+            pytesseract.get_tesseract_version()
+            return True
+        except Exception as e:
+            logger.error(f"Tesseract not available: {e}")
+            return False
+
+    @staticmethod
+    def _validate_image(image_bytes: bytes) -> Image.Image:
+        """Validate and load image, raising descriptive errors."""
+        try:
+            img = Image.open(BytesIO(image_bytes))
+            # Verify image is readable
+            img.verify()
+            # Reopen after verify (verify closes the image)
+            img = Image.open(BytesIO(image_bytes))
+            return img
+        except Exception as e:
+            raise OCRError(f"Invalid image format or corrupted image: {str(e)}")
+
+    @staticmethod
+    def _preprocess_basic(img: Image.Image) -> Image.Image:
+        """Basic preprocessing: orientation, format, size."""
         # Auto-rotate based on EXIF orientation (important for phone photos)
         try:
-            from PIL import ImageOps
             img = ImageOps.exif_transpose(img)
         except Exception:
             pass  # If EXIF data missing or error, continue
@@ -48,46 +84,183 @@ class LabelParser:
         if img.mode != "RGB":
             img = img.convert("RGB")
 
-        # Resize to optimal size for OCR (not too small, not too large)
+        # Resize to optimal size for OCR
         width, height = img.size
-
-        # If image is very large (phone photos), resize down for faster processing
         max_dimension = 2000
+        min_dimension = 800
+
+        # Downscale if too large
         if width > max_dimension or height > max_dimension:
             scale_factor = max_dimension / max(width, height)
             new_width = int(width * scale_factor)
             new_height = int(height * scale_factor)
             img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
-        # If image is too small, upscale
-        elif width < 800 or height < 800:
-            scale_factor = max(800 / width, 800 / height)
+        # Upscale if too small
+        elif width < min_dimension or height < min_dimension:
+            scale_factor = max(min_dimension / width, min_dimension / height)
             new_width = int(width * scale_factor)
             new_height = int(height * scale_factor)
             img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
-        # Increase sharpness for clearer text
-        img = img.filter(ImageFilter.SHARPEN)
+        return img
 
-        # Increase contrast for better OCR
+    @staticmethod
+    def _preprocess_strategy_1(img: Image.Image) -> Image.Image:
+        """Strategy 1: Moderate enhancement (good for clear labels)."""
+        img = LabelParser._preprocess_basic(img)
+        # Light sharpening
+        img = img.filter(ImageFilter.SHARPEN)
+        # Moderate contrast enhancement
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(1.5)
+        return img
+
+    @staticmethod
+    def _preprocess_strategy_2(img: Image.Image) -> Image.Image:
+        """Strategy 2: Grayscale + binarization (good for high contrast labels)."""
+        img = LabelParser._preprocess_basic(img)
+        # Convert to grayscale
+        img = img.convert("L")
+        # Enhance contrast
         enhancer = ImageEnhance.Contrast(img)
         img = enhancer.enhance(2.0)
-
-        # Increase brightness slightly
-        brightness_enhancer = ImageEnhance.Brightness(img)
-        img = brightness_enhancer.enhance(1.2)
-
+        # Binarize (convert to pure black/white)
+        threshold = 128
+        img = img.point(lambda x: 255 if x > threshold else 0, mode='1')
+        # Convert back to RGB for Tesseract
+        img = img.convert("RGB")
         return img
+
+    @staticmethod
+    def _preprocess_strategy_3(img: Image.Image) -> Image.Image:
+        """Strategy 3: Aggressive enhancement (for poor quality images)."""
+        img = LabelParser._preprocess_basic(img)
+        # Sharpening
+        img = img.filter(ImageFilter.SHARPEN)
+        # High contrast
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(2.5)
+        # Brightness adjustment
+        brightness_enhancer = ImageEnhance.Brightness(img)
+        img = brightness_enhancer.enhance(1.3)
+        return img
+
+    @staticmethod
+    def _preprocess_strategy_4(img: Image.Image) -> Image.Image:
+        """Strategy 4: Minimal processing (for already good images)."""
+        img = LabelParser._preprocess_basic(img)
+        # Just light sharpening
+        img = img.filter(ImageFilter.SHARPEN)
+        return img
+
+    @staticmethod
+    def _run_ocr_with_config(img: Image.Image, psm: int) -> Tuple[str, float]:
+        """
+        Run OCR with specific PSM mode and return text with confidence.
+        
+        Returns:
+            Tuple of (text, average_confidence)
+        """
+        config = f'--oem 3 --psm {psm}'
+        try:
+            # Get detailed data including confidence
+            data = pytesseract.image_to_data(img, config=config, output_type=pytesseract.Output.DICT)
+            
+            # Extract text and calculate average confidence
+            text_parts = []
+            confidences = []
+            
+            for i, conf in enumerate(data['conf']):
+                if int(conf) > 0:  # Valid confidence
+                    text_parts.append(data['text'][i])
+                    confidences.append(float(conf))
+            
+            text = ' '.join(text_parts).strip()
+            avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+            
+            return text, avg_confidence
+        except Exception as e:
+            logger.warning(f"OCR failed with PSM {psm}: {e}")
+            # Fallback to simple text extraction
+            text = pytesseract.image_to_string(img, config=config)
+            return text, 0.0
+
+    @staticmethod
+    def _extract_text_multiple_strategies(image_bytes: bytes) -> Tuple[str, str]:
+        """
+        Try multiple preprocessing strategies and PSM modes to get best OCR result.
+        
+        Returns:
+            Tuple of (best_text, strategy_used)
+        """
+        original_img = LabelParser._validate_image(image_bytes)
+        
+        strategies = [
+            ("strategy_1_moderate", LabelParser._preprocess_strategy_1),
+            ("strategy_4_minimal", LabelParser._preprocess_strategy_4),
+            ("strategy_2_grayscale", LabelParser._preprocess_strategy_2),
+            ("strategy_3_aggressive", LabelParser._preprocess_strategy_3),
+        ]
+        
+        best_text = ""
+        best_confidence = 0.0
+        best_strategy = "unknown"
+        best_psm = 6
+        
+        for strategy_name, strategy_func in strategies:
+            try:
+                preprocessed_img = strategy_func(original_img.copy())
+                
+                # Try different PSM modes
+                for psm in LabelParser.PSM_MODES:
+                    try:
+                        text, confidence = LabelParser._run_ocr_with_config(preprocessed_img, psm)
+                        
+                        # Check if we got meaningful text
+                        if text and len(text.strip()) > 10:  # At least some text
+                            # Prefer higher confidence or longer text
+                            if confidence > best_confidence or (confidence > 0 and len(text) > len(best_text)):
+                                best_text = text
+                                best_confidence = confidence
+                                best_strategy = strategy_name
+                                best_psm = psm
+                                
+                                # If confidence is very high, we can stop early
+                                if confidence > 80:
+                                    logger.info(f"High confidence OCR result: {confidence:.1f}% using {strategy_name} PSM{psm}")
+                                    return best_text, f"{strategy_name}_psm{psm}"
+                    except Exception as e:
+                        logger.debug(f"PSM {psm} failed for {strategy_name}: {e}")
+                        continue
+                        
+            except Exception as e:
+                logger.warning(f"Strategy {strategy_name} failed: {e}")
+                continue
+        
+        if best_text:
+            logger.info(f"Best OCR result: confidence {best_confidence:.1f}% using {best_strategy} PSM{best_psm}")
+            return best_text, f"{best_strategy}_psm{best_psm}"
+        else:
+            # Last resort: try original image with default settings
+            try:
+                img = LabelParser._preprocess_basic(original_img)
+                text = pytesseract.image_to_string(img, config='--oem 3 --psm 3')
+                return text, "fallback"
+            except Exception as e:
+                raise OCRError(f"All OCR strategies failed. Last error: {str(e)}")
 
     @staticmethod
     def detect_brand(text: str) -> Optional[str]:
         """Detect brand from OCR text."""
+        if not text:
+            return None
+            
         text_lower = text.lower()
         # Remove spaces for better matching
         text_no_space = text_lower.replace(" ", "").replace("\n", "")
 
         # Bambu Lab - check first (before eSUN) since "Lab" might be misread
-        # Also check for partial matches
         if "bambu" in text_no_space or "bambulab" in text_no_space or "bambu lab" in text_lower:
             return "bambu"
         # eSUN variations
@@ -103,121 +276,151 @@ class LabelParser:
         """
         Parse filament label image and extract structured data.
 
-        Returns dict with keys: brand, material, color_name, diameter_mm, barcode
+        Returns dict with keys: brand, material, color_name, diameter_mm, barcode, raw_text, ocr_confidence, strategy_used
+        
+        Raises:
+            OCRError: If OCR fails or Tesseract is not available
         """
-        # Preprocess and run OCR
-        img = LabelParser.preprocess_image(image_bytes)
+        # Check Tesseract availability
+        if not LabelParser._check_tesseract_available():
+            raise OCRError(
+                "Tesseract OCR is not installed or not accessible. "
+                "Please ensure Tesseract is installed and in your PATH."
+            )
 
-        # Configure Tesseract for better accuracy
-        # PSM 3 = Fully automatic page segmentation (default)
-        # OEM 3 = Default OCR Engine Mode (both legacy and LSTM)
-        custom_config = r'--oem 3 --psm 3'
-        text = pytesseract.image_to_string(img, config=custom_config)
+        try:
+            # Extract text using multiple strategies
+            text, strategy_used = LabelParser._extract_text_multiple_strategies(image_bytes)
+            
+            if not text or len(text.strip()) < 5:
+                return {
+                    "brand": None,
+                    "material": None,
+                    "color_name": None,
+                    "diameter_mm": None,
+                    "barcode": None,
+                    "raw_text": text or "",
+                    "ocr_confidence": 0.0,
+                    "strategy_used": strategy_used,
+                    "error": "No text detected in image. Please ensure the image is clear and contains readable text."
+                }
 
-        # Detect brand
-        brand = LabelParser.detect_brand(text)
-        if not brand:
-            return {
-                "brand": None,
+            # Detect brand
+            brand = LabelParser.detect_brand(text)
+            if not brand:
+                return {
+                    "brand": None,
+                    "material": None,
+                    "color_name": None,
+                    "diameter_mm": None,
+                    "barcode": None,
+                    "raw_text": text,
+                    "ocr_confidence": 0.0,
+                    "strategy_used": strategy_used,
+                    "error": f"Could not detect brand. Detected text: {text[:200]}..."
+                }
+
+            patterns = LabelParser.BRAND_PATTERNS[brand]
+
+            # Extract fields using brand-specific patterns
+            brand_names = {
+                "esun": "eSUN",
+                "sunlu": "Sunlu",
+                "bambu": "Bambu Lab"
+            }
+            result = {
+                "brand": brand_names.get(brand, brand.title()),
                 "material": None,
                 "color_name": None,
                 "diameter_mm": None,
                 "barcode": None,
-                "raw_text": text
+                "raw_text": text,
+                "ocr_confidence": 0.0,
+                "strategy_used": strategy_used
             }
 
-        patterns = LabelParser.BRAND_PATTERNS[brand]
-
-        # Extract fields using brand-specific patterns
-        brand_names = {
-            "esun": "eSUN",
-            "sunlu": "Sunlu",
-            "bambu": "Bambu Lab"
-        }
-        result = {
-            "brand": brand_names.get(brand, brand.title()),
-            "material": None,
-            "color_name": None,
-            "diameter_mm": None,
-            "barcode": None,
-            "raw_text": text
-        }
-
-        # Material
-        # First try standard pattern
-        material_match = re.search(patterns["material"], text, re.IGNORECASE)
-        if material_match:
-            # Normalize material name (remove hyphens, standardize spacing)
-            material = material_match.group(1).upper()
-            material = material.replace("-", " ")  # Convert hyphens to spaces
-            material = " ".join(material.split())  # Normalize whitespace
-            result["material"] = material
-        else:
-            # Fallback: look for common material names anywhere in text
-            text_upper = text.upper()
-            # Check compound materials first (PETG HF before PETG, PLA+ before PLA)
-            if "PETG HF" in text_upper or "PETGHF" in text_upper or "PETG-HF" in text_upper:
-                result["material"] = "PETG HF"
-            elif "PLA+" in text_upper or "PLA +" in text_upper or "PLA PLUS" in text_upper:
-                result["material"] = "PLA+"
-            elif "PETG" in text_upper:
-                result["material"] = "PETG"
-            elif "PLA" in text_upper:
-                result["material"] = "PLA"
-            elif "ABS" in text_upper:
-                result["material"] = "ABS"
-            elif "TPU" in text_upper:
-                result["material"] = "TPU"
-
-        # Color
-        # Try common color word search first (more reliable than regex patterns)
-        common_colors = ["White", "Black", "Red", "Blue", "Green", "Yellow",
-                       "Orange", "Purple", "Grey", "Gray", "Silver", "Gold",
-                       "Pink", "Brown", "Natural", "Transparent", "Cyan", "Magenta"]
-
-        for color in common_colors:
-            if re.search(r'\b' + color + r'\b', text, re.IGNORECASE):
-                result["color_name"] = color
-                break
-
-        # If no common color found, try brand-specific pattern
-        if not result["color_name"]:
-            color_match = re.search(patterns["color"], text, re.IGNORECASE)
-            if color_match:
-                color_candidate = color_match.group(1).strip()
-                # Filter out invalid colors (brand names, materials, single letters, etc.)
-                invalid_patterns = [
-                    r'^[A-Z0-9]{1,3}$',  # Short codes like "A1", "HIF"
-                    r'(?i)^(esun|sunlu|bambu|pla|petg|abs|tpu|filament)',  # Brand/material names
-                ]
-                is_valid = True
-                for pattern in invalid_patterns:
-                    if re.match(pattern, color_candidate):
-                        is_valid = False
-                        break
-
-                if is_valid and len(color_candidate) > 3:
-                    result["color_name"] = color_candidate.title()
-
-        # Diameter
-        diameter_match = re.search(patterns["diameter"], text)
-        if diameter_match:
-            result["diameter_mm"] = float(diameter_match.group(1))
-
-        # Barcode (if pattern exists)
-        if patterns["barcode"]:
-            barcode_match = re.search(patterns["barcode"], text)
-            if barcode_match:
-                result["barcode"] = barcode_match.group(0)
+            # Material
+            # First try standard pattern
+            material_match = re.search(patterns["material"], text, re.IGNORECASE)
+            if material_match:
+                # Normalize material name (remove hyphens, standardize spacing)
+                material = material_match.group(1).upper()
+                material = material.replace("-", " ")  # Convert hyphens to spaces
+                material = " ".join(material.split())  # Normalize whitespace
+                result["material"] = material
             else:
-                # Fallback: look for barcode-like patterns (common OCR substitutions)
-                # X003II1ZZL might be read as X0O3II1ZZL, X003l11ZZL, etc.
-                # General pattern: X followed by alphanumeric characters
-                fallback_match = re.search(r'X[0O][0O][0-9A-Z]{2}[0-9A-Z]{2}[0-9A-Z]{4}', text, re.IGNORECASE)
-                if fallback_match:
-                    barcode = fallback_match.group(0).upper()
-                    # Fix common OCR mistakes
-                    barcode = barcode.replace('O', '0')  # O → 0
-                    result["barcode"] = barcode
+                # Fallback: look for common material names anywhere in text
+                text_upper = text.upper()
+                # Check compound materials first (PETG HF before PETG, PLA+ before PLA)
+                if "PETG HF" in text_upper or "PETGHF" in text_upper or "PETG-HF" in text_upper:
+                    result["material"] = "PETG HF"
+                elif "PLA+" in text_upper or "PLA +" in text_upper or "PLA PLUS" in text_upper:
+                    result["material"] = "PLA+"
+                elif "PETG" in text_upper:
+                    result["material"] = "PETG"
+                elif "PLA" in text_upper:
+                    result["material"] = "PLA"
+                elif "ABS" in text_upper:
+                    result["material"] = "ABS"
+                elif "TPU" in text_upper:
+                    result["material"] = "TPU"
 
-        return result
+            # Color
+            # Try common color word search first (more reliable than regex patterns)
+            common_colors = ["White", "Black", "Red", "Blue", "Green", "Yellow",
+                           "Orange", "Purple", "Grey", "Gray", "Silver", "Gold",
+                           "Pink", "Brown", "Natural", "Transparent", "Cyan", "Magenta"]
+
+            for color in common_colors:
+                if re.search(r'\b' + color + r'\b', text, re.IGNORECASE):
+                    result["color_name"] = color
+                    break
+
+            # If no common color found, try brand-specific pattern
+            if not result["color_name"]:
+                color_match = re.search(patterns["color"], text, re.IGNORECASE)
+                if color_match:
+                    color_candidate = color_match.group(1).strip()
+                    # Filter out invalid colors (brand names, materials, single letters, etc.)
+                    invalid_patterns = [
+                        r'^[A-Z0-9]{1,3}$',  # Short codes like "A1", "HIF"
+                        r'(?i)^(esun|sunlu|bambu|pla|petg|abs|tpu|filament)',  # Brand/material names
+                    ]
+                    is_valid = True
+                    for pattern in invalid_patterns:
+                        if re.match(pattern, color_candidate):
+                            is_valid = False
+                            break
+
+                    if is_valid and len(color_candidate) > 3:
+                        result["color_name"] = color_candidate.title()
+
+            # Diameter
+            diameter_match = re.search(patterns["diameter"], text)
+            if diameter_match:
+                result["diameter_mm"] = float(diameter_match.group(1))
+
+            # Barcode (if pattern exists)
+            if patterns["barcode"]:
+                barcode_match = re.search(patterns["barcode"], text)
+                if barcode_match:
+                    result["barcode"] = barcode_match.group(0)
+                else:
+                    # Fallback: look for barcode-like patterns (common OCR substitutions)
+                    # X003II1ZZL might be read as X0O3II1ZZL, X003l11ZZL, etc.
+                    # General pattern: X followed by alphanumeric characters
+                    fallback_match = re.search(r'X[0O][0O][0-9A-Z]{2}[0-9A-Z]{2}[0-9A-Z]{4}', text, re.IGNORECASE)
+                    if fallback_match:
+                        barcode = fallback_match.group(0).upper()
+                        # Fix common OCR mistakes
+                        barcode = barcode.replace('O', '0')  # O → 0
+                        result["barcode"] = barcode
+
+            return result
+
+        except OCRError:
+            # Re-raise OCR errors
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during OCR parsing: {e}", exc_info=True)
+            raise OCRError(f"Failed to parse label: {str(e)}")

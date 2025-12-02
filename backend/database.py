@@ -36,8 +36,14 @@ engine = create_engine(
 
 
 def init_db() -> None:
-    """Create database tables."""
-    SQLModel.metadata.create_all(engine)
+    """Create database tables if they don't exist."""
+    try:
+        SQLModel.metadata.create_all(engine)
+    except Exception as e:
+        # Log error but don't crash - allows app to start even if DB is temporarily unavailable
+        import logging
+        logging.error(f"Failed to initialize database: {e}")
+        raise
 
 
 def get_session() -> Session:

@@ -1,4 +1,5 @@
-from datetime import datetime
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, UploadFile, File
@@ -17,7 +18,21 @@ from backend.models import (
 from backend.ocr_service import LabelParser
 from backend.invoice_parser import InvoiceParser
 
-app = FastAPI(title="3D Filament Scanner API", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup/shutdown events."""
+    # Startup
+    init_db()
+    yield
+    # Shutdown (if needed in future)
+
+
+app = FastAPI(
+    title="3D Filament Scanner API",
+    version="1.0.0",
+    lifespan=lifespan
+)
 
 # Add CORS middleware for frontend
 app.add_middleware(
@@ -27,11 +42,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-def on_startup() -> None:
-    init_db()
 
 
 @app.get("/", tags=["health"])
@@ -93,7 +103,7 @@ def update_product(
     update_data = product_in.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(product, key, value)
-    product.updated_at = datetime.utcnow()
+    product.updated_at = datetime.now(timezone.utc)
 
     session.add(product)
     session.commit()
@@ -154,7 +164,7 @@ def update_spool(
     update_data = spool_in.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(spool, key, value)
-    spool.updated_at = datetime.utcnow()
+    spool.updated_at = datetime.now(timezone.utc)
 
     session.add(spool)
     session.commit()
@@ -177,22 +187,40 @@ async def parse_label(file: UploadFile = File(...)):
     """
     Upload a filament box label image and extract structured data.
 
-    Returns parsed fields: brand, material, color_name, diameter_mm, barcode, raw_text
+    Returns parsed fields: brand, material, color_name, diameter_mm, barcode, raw_text, ocr_confidence, strategy_used
 
     The raw_text field shows exactly what Tesseract OCR extracted from the image.
     This is useful for debugging when fields are not detected correctly.
+    
+    The ocr_confidence field indicates OCR quality (0-100).
+    The strategy_used field shows which preprocessing strategy worked best.
     """
     # Validate file type
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
 
-    # Read image bytes
-    image_bytes = await file.read()
+    try:
+        # Read image bytes
+        image_bytes = await file.read()
+        
+        if len(image_bytes) == 0:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
-    # Parse label using OCR
-    result = LabelParser.parse_label(image_bytes)
-
-    return result
+        # Parse label using OCR
+        from backend.ocr_service import OCRError
+        try:
+            result = LabelParser.parse_label(image_bytes)
+            return result
+        except OCRError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process image: {str(e)}"
+        )
 
 
 # Invoice Parsing Endpoint
@@ -326,6 +354,8 @@ async def import_from_invoice(
 
 
 if __name__ == "__main__":
+    import os
     import uvicorn
 
-    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=port, reload=True)

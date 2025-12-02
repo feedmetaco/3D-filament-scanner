@@ -14,7 +14,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY backend ./backend
-COPY requirements.txt .
 
 # Copy and make start script executable
 COPY backend/start.sh .
