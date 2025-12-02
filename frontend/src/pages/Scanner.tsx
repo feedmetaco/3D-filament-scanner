@@ -269,6 +269,18 @@ export default function Scanner() {
             </button>
           </div>
 
+          {/* Debug: Show raw OCR text */}
+          {parsed.raw_text && (
+            <details className="bg-zinc-900/30 border border-zinc-800 rounded p-3">
+              <summary className="text-xs font-mono text-zinc-500 cursor-pointer hover:text-zinc-400">
+                DEBUG: Raw OCR Text (click to expand)
+              </summary>
+              <pre className="mt-2 text-xs font-mono text-zinc-400 whitespace-pre-wrap break-words">
+                {parsed.raw_text}
+              </pre>
+            </details>
+          )}
+
           {/* Form */}
           <div className="space-y-4 bg-zinc-900/50 border border-zinc-800 rounded-lg p-4">
             <p className="text-xs font-mono text-zinc-500 uppercase tracking-wide">Product Details</p>
