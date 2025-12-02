@@ -86,15 +86,16 @@ class LabelParser:
         # Remove spaces for better matching
         text_no_space = text_lower.replace(" ", "").replace("\n", "")
 
+        # Bambu Lab - check first (before eSUN) since "Lab" might be misread
+        # Also check for partial matches
+        if "bambu" in text_no_space or "bambulab" in text_no_space or "bambu lab" in text_lower:
+            return "bambu"
         # eSUN variations
-        if "esun" in text_no_space or "e-sun" in text_lower or "e sun" in text_lower:
+        elif "esun" in text_no_space or "e-sun" in text_lower or "e sun" in text_lower:
             return "esun"
         # Sunlu
         elif "sunlu" in text_no_space:
             return "sunlu"
-        # Bambu Lab
-        elif "bambu" in text_no_space or "bambulab" in text_no_space:
-            return "bambu"
         return None
 
     @staticmethod
@@ -154,12 +155,15 @@ class LabelParser:
         else:
             # Fallback: look for common material names anywhere in text
             text_upper = text.upper()
-            if "PLA+" in text_upper or "PLA +" in text_upper:
+            # Check compound materials first (PETG HF before PETG, PLA+ before PLA)
+            if "PETG HF" in text_upper or "PETGHF" in text_upper or "PETG-HF" in text_upper:
+                result["material"] = "PETG HF"
+            elif "PLA+" in text_upper or "PLA +" in text_upper or "PLA PLUS" in text_upper:
                 result["material"] = "PLA+"
-            elif "PLA" in text_upper:
-                result["material"] = "PLA"
             elif "PETG" in text_upper:
                 result["material"] = "PETG"
+            elif "PLA" in text_upper:
+                result["material"] = "PLA"
             elif "ABS" in text_upper:
                 result["material"] = "ABS"
             elif "TPU" in text_upper:
