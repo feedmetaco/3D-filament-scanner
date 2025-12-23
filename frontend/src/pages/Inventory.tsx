@@ -22,6 +22,7 @@ export default function Inventory() {
   const [locationUpdatingId, setLocationUpdatingId] = useState<number | null>(null);
   const [editingLocationId, setEditingLocationId] = useState<number | null>(null);
   const [locationDraft, setLocationDraft] = useState<string>('');
+  const [printingSpoolId, setPrintingSpoolId] = useState<number | null>(null);
   const [filters, setFilters] = useState<InventoryFilters>({
     brand: '',
     material: '',
@@ -127,6 +128,25 @@ export default function Inventory() {
     }
   };
 
+  const handlePrintLabel = async (spool: SpoolWithProduct, format: 'pdf' | 'png' = 'pdf') => {
+    setPrintingSpoolId(spool.id);
+    try {
+      const response = await spoolsApi.label(spool.id, format);
+      const blob = new Blob([response.data], { type: response.headers['content-type'] });
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener');
+
+      // Refresh spool to capture last printed timestamp
+      const { data } = await spoolsApi.get(spool.id);
+      applySpoolUpdate(data);
+    } catch (error) {
+      console.error('Failed to generate label:', error);
+      alert('Could not generate label. Please try again.');
+    } finally {
+      setPrintingSpoolId(null);
+    }
+  };
+
   const filteredSpools = useMemo(() => {
     return spools.filter((spool) => {
       const product = spool.product;
@@ -196,6 +216,11 @@ export default function Inventory() {
   const formatDate = (dateString?: string) => {
     if (!dateString) return '—';
     return new Date(dateString).toLocaleDateString();
+  };
+
+  const formatDateTime = (dateString?: string) => {
+    if (!dateString) return '—';
+    return new Date(dateString).toLocaleString();
   };
 
   if (loading) {
@@ -534,6 +559,13 @@ export default function Inventory() {
                 </p>
               </div>
               <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handlePrintLabel(selectedSpool)}
+                  disabled={printingSpoolId === selectedSpool.id}
+                  className="px-3 py-2 text-[11px] font-mono clip-corner border border-primary/60 text-primary hover:bg-primary/10 disabled:opacity-50"
+                >
+                  {printingSpoolId === selectedSpool.id ? 'Printing…' : 'Print label'}
+                </button>
                 <div
                   className={`px-2 py-1 border text-[10px] font-mono font-bold uppercase tracking-widest ${getStatusColor(
                     selectedSpool.status
@@ -573,6 +605,10 @@ export default function Inventory() {
                 <div className="bg-black/30 border border-white/5 rounded-lg p-3 space-y-1">
                   <p className="text-muted">Location</p>
                   <p className="text-white">{selectedSpool.storage_location || '—'}</p>
+                </div>
+                <div className="bg-black/30 border border-white/5 rounded-lg p-3 space-y-1">
+                  <p className="text-muted">Last printed</p>
+                  <p className="text-white">{formatDateTime(selectedSpool.last_printed_at)}</p>
                 </div>
               </div>
 

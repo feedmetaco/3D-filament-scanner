@@ -2,9 +2,16 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+import io
+
 from fastapi import Depends, FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from sqlmodel import Session, select, SQLModel
+from reportlab.graphics import renderPDF, renderPM
+from reportlab.graphics.barcode import code128, qr
+from reportlab.graphics.shapes import Drawing, String, Rect
+from reportlab.lib import colors
 
 from backend.database import get_session, init_db
 from backend.models import (
@@ -343,6 +350,117 @@ def delete_spool(spool_id: int, session: Session = Depends(get_session)) -> None
         raise HTTPException(status_code=404, detail="Spool not found")
     session.delete(spool)
     session.commit()
+
+
+def _mm_to_points(mm: float) -> float:
+    """Convert millimeters to PDF points."""
+    return mm * 2.83465
+
+
+def _build_label_drawing(spool: Spool, product: Product) -> Drawing:
+    """Create a reusable drawing for PDF/PNG label output."""
+    width = _mm_to_points(50)
+    height = _mm_to_points(30)
+    drawing = Drawing(width, height)
+
+    # Background
+    drawing.add(Rect(0, 0, width, height, fillColor=colors.whitesmoke, strokeColor=colors.black, strokeWidth=0.5))
+
+    # Header
+    drawing.add(String(6, height - 10, f"#{spool.id}", fontName="Helvetica-Bold", fontSize=8, fillColor=colors.darkgray))
+    drawing.add(
+        String(
+            6,
+            height - 20,
+            f"{product.brand} {product.material}",
+            fontName="Helvetica-Bold",
+            fontSize=9,
+            fillColor=colors.black,
+        )
+    )
+    drawing.add(
+        String(
+            6,
+            height - 32,
+            f"{product.color_name} • {product.diameter_mm}mm",
+            fontName="Helvetica",
+            fontSize=8,
+            fillColor=colors.black,
+        )
+    )
+
+    if spool.storage_location:
+        drawing.add(
+            String(
+                6,
+                height - 44,
+                f"Loc: {spool.storage_location}",
+                fontName="Helvetica-Oblique",
+                fontSize=7,
+                fillColor=colors.darkblue,
+            )
+        )
+
+    # Barcode (Code128) and QR
+    barcode = code128.Code128(str(spool.id), barHeight=height / 3, humanReadable=False)
+    barcode.x = 6
+    barcode.y = 6
+    drawing.add(barcode)
+
+    qr_code = qr.QrCodeWidget(str(spool.id))
+    bounds = qr_code.getBounds()
+    qr_width = bounds[2] - bounds[0]
+    qr_height = bounds[3] - bounds[1]
+    scale = min(_mm_to_points(18) / qr_width, _mm_to_points(18) / qr_height)
+    qr_code.transform = [scale, 0, 0, scale, width - _mm_to_points(20), 6]
+    drawing.add(qr_code)
+
+    return drawing
+
+
+@app.get("/api/v1/spools/{spool_id}/label", tags=["spools"])
+def generate_spool_label(
+    spool_id: int,
+    format: str = "pdf",
+    session: Session = Depends(get_session)
+):
+    """
+    Generate a printable label for a spool.
+
+    Supports PDF (default) and PNG outputs sized for 50x30mm labels and includes
+    brand, color, material, diameter, storage location, and barcode/QR for the spool ID.
+    """
+    spool = session.get(Spool, spool_id)
+    if not spool:
+        raise HTTPException(status_code=404, detail="Spool not found")
+
+    product = session.get(Product, spool.product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found for spool")
+
+    fmt = format.lower()
+    if fmt not in {"pdf", "png"}:
+        raise HTTPException(status_code=400, detail="Invalid format. Choose 'pdf' or 'png'.")
+
+    drawing = _build_label_drawing(spool, product)
+    if fmt == "pdf":
+        content = renderPDF.drawToString(drawing)
+        media_type = "application/pdf"
+        filename = f"spool-{spool_id}-label.pdf"
+    else:
+        content = renderPM.drawToString(drawing, fmt="PNG")
+        media_type = "image/png"
+        filename = f"spool-{spool_id}-label.png"
+
+    spool.last_printed_at = datetime.now(timezone.utc)
+    session.add(spool)
+    session.commit()
+
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type=media_type,
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
 
 
 # OCR Endpoint

@@ -25,6 +25,7 @@ export interface Spool {
   price?: number;
   storage_location?: string;
   photo_path?: string;
+  last_printed_at?: string;
   status: 'in_stock' | 'used_up' | 'donated' | 'lost';
   created_at: string;
   updated_at: string;
@@ -100,6 +101,11 @@ export const spoolsApi = {
     api.post<Spool>('/spools', data),
   update: (id: number, data: Partial<Spool>) =>
     api.put<SpoolDetail>(`/spools/${id}`, data),
+  label: (id: number, format: 'pdf' | 'png' = 'pdf') =>
+    api.get<Blob>(`/spools/${id}/label`, {
+      params: { format },
+      responseType: 'blob',
+    }),
   delete: (id: number) => api.delete(`/spools/${id}`),
 };
 
