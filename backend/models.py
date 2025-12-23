@@ -60,6 +60,11 @@ class SpoolBase(SQLModel):
     storage_location: Optional[str] = None
     photo_path: Optional[str] = None
     status: SpoolStatus = Field(default=SpoolStatus.IN_STOCK)
+    last_printed_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True)),
+        description="Timestamp of the most recent label generation",
+    )
 
 
 class Spool(SpoolBase, table=True):
